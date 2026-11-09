@@ -57,7 +57,7 @@ def get_students_with_status():
         sheet = sh.worksheet("Список")
         rows = sheet.get_all_values()
         students = []
-        ignore_words = ['фио', 'список', 'фамилия', 'имя', 'фамилия имя', 'ученик', '№']
+        ignore_words = ['фио', 'список', 'фамилия', 'имя', 'фамилия имя', 'ученик', '№', 'цена обеда', 'цена']
         
         for i, row in enumerate(rows):
             if len(row) >= 1:
