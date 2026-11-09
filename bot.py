@@ -52,22 +52,23 @@ def get_current_sheet_name():
     months = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь']
     return f"{months[datetime.datetime.now().month - 1]} {datetime.datetime.now().year}"
 
+# === ИСПРАВЛЕННАЯ ФУНКЦИЯ ЧТЕНИЯ СПИСКА ===
 def get_students_with_status():
     try:
         sheet = sh.worksheet("Список")
-        col_a = sheet.col_values(1)
-        col_b = sheet.col_values(2)
+        rows = sheet.get_all_values()  # Используем проверенный метод
         students = []
-        ignore_words = ['фио', 'список', 'фамилия', 'имя', 'фамилия имя', 'ученик']
+        ignore_words = ['фио', 'список', 'фамилия', 'имя', 'фамилия имя', 'ученик', '№']
         
-        for i in range(len(col_a)):
-            name = str(col_a[i]).strip()
-            if name and name.lower() not in ignore_words:
-                status = str(col_b[i]).strip().upper()
-                is_free = status in ['Б', 'БЕСПЛАТНО', 'FREE', 'ЛЬГОТНО', 'ЛЬГОТНОЕ']
-                students.append({'row': i + 1, 'name': name, 'is_free': is_free})
+        for i, row in enumerate(rows):
+            if len(row) >= 1:
+                name = str(row[0]).strip()
+                if name and name.lower() not in ignore_words:
+                    status = str(row[1]).strip().upper() if len(row) >= 2 else ''
+                    is_free = status in ['Б', 'БЕСПЛАТНО', 'FREE', 'ЛЬГОТНО', 'ЛЬГОТНОЕ']
+                    students.append({'row': i + 1, 'name': name, 'is_free': is_free})
         
-        print(f"Найдено учеников: {len(students)}")
+        print(f"DEBUG: Найдено учеников: {len(students)}")
         return students
     except Exception as e:
         print(f"Ошибка чтения списка: {e}")
@@ -105,6 +106,8 @@ def get_available_dates_markup(action_prefix):
     except: pass
     return markup
 
+# ================= СТАРТ И МЕНЮ =================
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
@@ -122,6 +125,11 @@ def send_welcome(message):
     user_states[user_id] = {'role': 'student', 'name': None}
     markup = types.InlineKeyboardMarkup(row_width=1)
     students = get_students_with_status()
+    
+    if not students:
+        bot.send_message(message.chat.id, "⚠️ Не удалось загрузить список учеников. Проверьте таблицу.")
+        return
+        
     for st in students:
         markup.add(types.InlineKeyboardButton(st['name'], callback_data=f"select_name_{st['row']}"))
     
@@ -156,6 +164,8 @@ def show_responsible_menu(message):
     markup.add('📋 Список записавшихся')
     markup.add('📊 Статистика дня')
     bot.send_message(message.chat.id, "👤 Меню ответственного за питание", reply_markup=markup)
+
+# ================= УПРАВЛЕНИЕ ЗАПИСЯМИ =================
 
 @bot.message_handler(func=lambda message: message.text == '📝 Управление записями')
 def start_manage_records(message):
@@ -320,6 +330,8 @@ def cancel_manage(call):
     bot.answer_callback_query(call.id, "Отменено")
     bot.send_message(call.message.chat.id, "Действие отменено.")
 
+# ================= ПРОСМОТР И СТАТИСТИКА =================
+
 @bot.message_handler(func=lambda message: message.text == '📋 Список записавшихся')
 def show_all_signed(message):
     if user_states.get(message.from_user.id, {}).get('role') not in ['admin', 'responsible']:
@@ -396,6 +408,8 @@ def process_stats(call):
         bot.send_message(call.message.chat.id, response)
     except Exception as e:
         bot.send_message(call.message.chat.id, f"Ошибка: {e}")
+
+# ================= УПРАВЛЕНИЕ ОТВЕТСТВЕННЫМИ =================
 
 @bot.message_handler(func=lambda message: message.text == '⚙️ Управление ответственными')
 def admin_panel(message):
