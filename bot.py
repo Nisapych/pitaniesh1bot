@@ -66,6 +66,8 @@ def get_students_with_status():
                 status = str(col_b[i]).strip().upper()
                 is_free = status in ['Б', 'БЕСПЛАТНО', 'FREE', 'ЛЬГОТНО', 'ЛЬГОТНОЕ']
                 students.append({'row': i + 1, 'name': name, 'is_free': is_free})
+        
+        print(f"Найдено учеников: {len(students)}")
         return students
     except Exception as e:
         print(f"Ошибка чтения списка: {e}")
@@ -102,8 +104,6 @@ def get_available_dates_markup(action_prefix):
                 ))
     except: pass
     return markup
-
-# ================= СТАРТ И МЕНЮ =================
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -157,8 +157,6 @@ def show_responsible_menu(message):
     markup.add('📊 Статистика дня')
     bot.send_message(message.chat.id, "👤 Меню ответственного за питание", reply_markup=markup)
 
-# ================= УПРАВЛЕНИЕ ЗАПИСЯМИ (НОВОЕ) =================
-
 @bot.message_handler(func=lambda message: message.text == '📝 Управление записями')
 def start_manage_records(message):
     user_id = message.from_user.id
@@ -182,11 +180,14 @@ def handle_manage_date_selection(call):
     
     bot.answer_callback_query(call.id, f"Дата: {date_str}")
     
-    # Загружаем текущий статус всех учеников
     try:
         sheet = sh.worksheet(get_current_sheet_name())
         col = get_date_column_index(date_str)
         students = get_students_with_status()
+        
+        if not students:
+            bot.send_message(call.message.chat.id, "⚠️ Список учеников пуст! Проверьте лист 'Список' в таблице.")
+            return
         
         for st in students:
             val = str(sheet.cell(st['row'], col).value).strip()
@@ -196,10 +197,9 @@ def handle_manage_date_selection(call):
                 st['current_status'] = 'free'
             else:
                 st['current_status'] = 'none'
-    except:
-        students = get_students_with_status()
-        for st in students:
-            st['current_status'] = 'none'
+    except Exception as e:
+        bot.send_message(call.message.chat.id, f"Ошибка загрузки данных: {e}")
+        return
     
     text = f"Управление записями на {date_str}:\n\n⬜ - не записан\n✅ (П) - записан платно\n🆓 (Б) - записан бесплатно\n\nНажмите на ученика, чтобы изменить его статус:"
     render_manage_students(call.message.chat.id, students, text)
@@ -247,7 +247,6 @@ def toggle_manage_student(call):
     
     bot.answer_callback_query(call.id)
     
-    # Перезагружаем список
     try:
         sheet = sh.worksheet(get_current_sheet_name())
         col = get_date_column_index(state['target_date'])
@@ -292,12 +291,10 @@ def confirm_manage(call):
             if st['row'] in selected_rows:
                 current = st.get('current_status', 'none')
                 if current == 'none':
-                    # Записываем
                     mark = 'Б' if st['is_free'] else 'П'
                     sheet.update_cell(st['row'], col, mark)
                     to_sign.append(f"{st['name']} ({'Б' if st['is_free'] else 'П'})")
                 else:
-                    # Снимаем
                     sheet.update_cell(st['row'], col, '')
                     to_remove.append(st['name'])
         
@@ -322,8 +319,6 @@ def cancel_manage(call):
         user_states[user_id]['selected'] = []
     bot.answer_callback_query(call.id, "Отменено")
     bot.send_message(call.message.chat.id, "Действие отменено.")
-
-# ================= ПРОСМОТР И СТАТИСТИКА =================
 
 @bot.message_handler(func=lambda message: message.text == '📋 Список записавшихся')
 def show_all_signed(message):
@@ -401,8 +396,6 @@ def process_stats(call):
         bot.send_message(call.message.chat.id, response)
     except Exception as e:
         bot.send_message(call.message.chat.id, f"Ошибка: {e}")
-
-# ================= УПРАВЛЕНИЕ ОТВЕТСТВЕННЫМИ =================
 
 @bot.message_handler(func=lambda message: message.text == '⚙️ Управление ответственными')
 def admin_panel(message):
