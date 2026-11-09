@@ -57,6 +57,7 @@ def get_students_with_status():
         sheet = sh.worksheet("Список")
         rows = sheet.get_all_values()
         students = []
+        # ⭐ ДОБАВЛЕНЫ 'цена обеда' и 'цена' в список игнорируемых слов
         ignore_words = ['фио', 'список', 'фамилия', 'имя', 'фамилия имя', 'ученик', '№', 'цена обеда', 'цена']
         
         for i, row in enumerate(rows):
@@ -123,7 +124,7 @@ def send_welcome(message):
     students = get_students_with_status()
     
     if not students:
-        bot.send_message(message.chat.id, "️ Не удалось загрузить список учеников. Проверьте таблицу.")
+        bot.send_message(message.chat.id, "⚠️ Не удалось загрузить список учеников.")
         return
         
     for st in students:
@@ -150,7 +151,7 @@ def show_admin_menu(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
     markup.add('📝 Управление записями')
     markup.add('📋 Список записавшихся')
-    markup.add(' Статистика дня')
+    markup.add('📊 Статистика дня')
     markup.add('⚙️ Управление ответственными')
     bot.send_message(message.chat.id, "👨‍🏫 Панель классного руководителя", reply_markup=markup)
 
@@ -159,7 +160,7 @@ def show_responsible_menu(message):
     markup.add('📝 Управление записями')
     markup.add('📋 Список записавшихся')
     markup.add('📊 Статистика дня')
-    bot.send_message(message.chat.id, " Меню ответственного за питание", reply_markup=markup)
+    bot.send_message(message.chat.id, "👤 Меню ответственного", reply_markup=markup)
 
 @bot.message_handler(func=lambda message: message.text == '📝 Управление записями')
 def start_manage_records(message):
@@ -168,7 +169,7 @@ def start_manage_records(message):
         return
     
     user_states[user_id] = {'role': user_states[user_id]['role'], 'action': 'select_date_manage', 'selected': []}
-    bot.send_message(message.chat.id, "Выберите дату для управления записями:", reply_markup=get_available_dates_markup('manage_date'))
+    bot.send_message(message.chat.id, "Выберите дату:", reply_markup=get_available_dates_markup('manage_date'))
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('manage_date_'))
 def handle_manage_date_selection(call):
@@ -182,6 +183,7 @@ def handle_manage_date_selection(call):
     state['target_date'] = date_str
     state['selected'] = []
     state['students_cache'] = []
+    state['manage_message_id'] = None
     
     bot.answer_callback_query(call.id, f"Дата: {date_str}")
     
@@ -191,7 +193,7 @@ def handle_manage_date_selection(call):
         students = get_students_with_status()
         
         if not students:
-            bot.send_message(call.message.chat.id, "⚠️ Список учеников пуст! Проверьте лист 'Список' в таблице.")
+            bot.send_message(call.message.chat.id, "⚠️ Список учеников пуст!")
             return
         
         for st in students:
@@ -206,13 +208,14 @@ def handle_manage_date_selection(call):
         state['students_cache'] = students
         
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"Ошибка загрузки данных: {e}")
+        bot.send_message(call.message.chat.id, f"Ошибка: {e}")
         return
     
-    # Отправляем первое сообщение со списком
-    render_manage_students(call.message.chat.id, state, call.message.message_id)
+    # Отправляем новое сообщение со списком
+    msg = render_manage_students_message(call.message.chat.id, state)
+    state['manage_message_id'] = msg.message_id
 
-def render_manage_students(chat_id, state, message_id=None):
+def render_manage_students_message(chat_id, state):
     students = state.get('students_cache', [])
     selected_rows = state.get('selected', [])
     
@@ -233,32 +236,18 @@ def render_manage_students(chat_id, state, message_id=None):
         if is_selected:
             if current_status == 'none':
                 new_status = "🆓" if st['is_free'] else "✅ (П)"
-                prefix = "👉 "
-                button_text = f"{prefix}{st['name']} {status_icon} → {new_status}"
+                button_text = f"👉 {st['name']} {status_icon} → {new_status}"
             else:
-                prefix = "👉 "
-                button_text = f"{prefix}{st['name']} {status_icon} → ⬜"
+                button_text = f"👉 {st['name']} {status_icon} → ⬜"
         else:
-            prefix = "   "
-            button_text = f"{prefix}{st['name']} {status_icon}"
+            button_text = f"   {st['name']} {status_icon}"
         
         markup.add(types.InlineKeyboardButton(button_text, callback_data=f"toggle_manage_{row_num}"))
     
     markup.add(types.InlineKeyboardButton("💾 Сохранить изменения", callback_data="confirm_manage"))
     markup.add(types.InlineKeyboardButton("🔙 Отмена", callback_data="cancel_manage"))
     
-    text = "Отметьте учеников для изменения (нажмите, чтобы переключить):"
-    
-    if message_id:
-        # Редактируем существующее сообщение
-        try:
-            bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id, reply_markup=markup)
-            bot.edit_message_text(text=text, chat_id=chat_id, message_id=message_id, reply_markup=markup)
-        except:
-            pass
-    else:
-        # Отправляем новое сообщение
-        bot.send_message(chat_id, text, reply_markup=markup)
+    return bot.send_message(chat_id, "Отметьте учеников (нажмите для переключения):", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('toggle_manage_'))
 def toggle_manage_student(call):
@@ -275,8 +264,43 @@ def toggle_manage_student(call):
         state['selected'].append(row)
     
     bot.answer_callback_query(call.id)
-    # Редактируем то же самое сообщение
-    render_manage_students(call.message.chat.id, state, call.message.message_id)
+    
+    # Редактируем существующее сообщение
+    students = state.get('students_cache', [])
+    selected_rows = state.get('selected', [])
+    
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    
+    for st in students:
+        row_num = st['row']
+        is_selected = row_num in selected_rows
+        current_status = st.get('current_status', 'none')
+        
+        if current_status == 'paid':
+            status_icon = "✅ (П)"
+        elif current_status == 'free':
+            status_icon = "🆓 (Б)"
+        else:
+            status_icon = "⬜"
+        
+        if is_selected:
+            if current_status == 'none':
+                new_status = "🆓" if st['is_free'] else "✅ (П)"
+                button_text = f"👉 {st['name']} {status_icon} → {new_status}"
+            else:
+                button_text = f"👉 {st['name']} {status_icon} → ⬜"
+        else:
+            button_text = f"   {st['name']} {status_icon}"
+        
+        markup.add(types.InlineKeyboardButton(button_text, callback_data=f"toggle_manage_{row_num}"))
+    
+    markup.add(types.InlineKeyboardButton("💾 Сохранить изменения", callback_data="confirm_manage"))
+    markup.add(types.InlineKeyboardButton("🔙 Отмена", callback_data="cancel_manage"))
+    
+    try:
+        bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
+    except:
+        pass
 
 @bot.callback_query_handler(func=lambda call: call.data == 'confirm_manage')
 def confirm_manage(call):
@@ -336,7 +360,7 @@ def cancel_manage(call):
 def show_all_signed(message):
     if user_states.get(message.from_user.id, {}).get('role') not in ['admin', 'responsible']:
         return
-    bot.send_message(message.chat.id, "Выберите дату для просмотра:", reply_markup=get_available_dates_markup('view_list'))
+    bot.send_message(message.chat.id, "Выберите дату:", reply_markup=get_available_dates_markup('view_list'))
     user_states[message.from_user.id]['action'] = 'view_list'
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('view_list_'))
@@ -371,7 +395,7 @@ def process_view_list(call):
 def show_daily_stats(message):
     if user_states.get(message.from_user.id, {}).get('role') not in ['admin', 'responsible']:
         return
-    bot.send_message(message.chat.id, "Выберите дату для статистики:", reply_markup=get_available_dates_markup('view_stats'))
+    bot.send_message(message.chat.id, "Выберите дату:", reply_markup=get_available_dates_markup('view_stats'))
     user_states[message.from_user.id]['action'] = 'view_stats'
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('view_stats_'))
@@ -413,13 +437,13 @@ def process_stats(call):
 def admin_panel(message):
     if message.from_user.id != ADMIN_ID: return
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
-    markup.add(' Добавить ответственного', '🗑 Убрать ответственного', '📋 Список ответственных', '🔙 В главное меню')
+    markup.add('👤 Добавить ответственного', '🗑 Убрать ответственного', '📋 Список ответственных', '🔙 В главное меню')
     bot.send_message(message.chat.id, "Выберите действие:", reply_markup=markup)
 
-@bot.message_handler(func=lambda message: message.text == ' Добавить ответственного')
+@bot.message_handler(func=lambda message: message.text == '👤 Добавить ответственного')
 def add_responsible(message):
     if message.from_user.id != ADMIN_ID: return
-    bot.send_message(message.chat.id, "Перешлите мне любое сообщение от этого ученика ИЛИ напишите его Telegram ID числом.")
+    bot.send_message(message.chat.id, "Перешлите сообщение от ученика ИЛИ напишите его ID числом.")
     user_states[message.from_user.id]['action'] = 'adding_resp'
 
 @bot.message_handler(func=lambda message: user_states.get(message.from_user.id, {}).get('action') == 'adding_resp')
@@ -432,29 +456,29 @@ def process_add_resp(message):
             new_id = int(message.text.strip())
             name = str(new_id)
         except:
-            bot.send_message(message.chat.id, "Не удалось определить ID. Перешлите сообщение или напишите ID числом.")
+            bot.send_message(message.chat.id, "Не удалось определить ID.")
             return
     
     resp = load_responsible()
     if new_id in resp:
-        bot.send_message(message.chat.id, "Этот пользователь уже является ответственным.")
+        bot.send_message(message.chat.id, "Уже является ответственным.")
     else:
         resp.append(new_id)
         save_responsible(resp)
-        bot.send_message(message.chat.id, f"✅ {name} назначен ответственным за питание!")
+        bot.send_message(message.chat.id, f"✅ {name} назначен ответственным!")
     user_states[message.from_user.id]['action'] = None
 
-@bot.message_handler(func=lambda message: message.text == ' Убрать ответственного')
+@bot.message_handler(func=lambda message: message.text == '🗑 Убрать ответственного')
 def remove_responsible(message):
     if message.from_user.id != ADMIN_ID: return
     resp = load_responsible()
     if not resp:
-        bot.send_message(message.chat.id, "Список ответственных пуст.")
+        bot.send_message(message.chat.id, "Список пуст.")
         return
     markup = types.InlineKeyboardMarkup(row_width=1)
     for r_id in resp:
         markup.add(types.InlineKeyboardButton(f"ID: {r_id}", callback_data=f"remove_resp_{r_id}"))
-    bot.send_message(message.chat.id, "Выберите ответственного для удаления:", reply_markup=markup)
+    bot.send_message(message.chat.id, "Выберите для удаления:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('remove_resp_'))
 def process_remove_resp(call):
@@ -464,16 +488,16 @@ def process_remove_resp(call):
     if r_id in resp:
         resp.remove(r_id)
         save_responsible(resp)
-        bot.send_message(call.message.chat.id, f"✅ Ответственный с ID {r_id} удалён.")
+        bot.send_message(call.message.chat.id, f"✅ Ответственный {r_id} удалён.")
 
 @bot.message_handler(func=lambda message: message.text == '📋 Список ответственных')
 def list_resp(message):
     if message.from_user.id != ADMIN_ID: return
     resp = load_responsible()
     if not resp:
-        bot.send_message(message.chat.id, "Список ответственных пуст.")
+        bot.send_message(message.chat.id, "Список пуст.")
         return
-    response = "📋 Ответственные за питание:\n" + "\n".join([f"{i}. ID: `{r}`" for i, r in enumerate(resp, 1)])
+    response = "📋 Ответственные:\n" + "\n".join([f"{i}. ID: `{r}`" for i, r in enumerate(resp, 1)])
     bot.send_message(message.chat.id, response, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: message.text == '🔙 В главное меню')
@@ -489,8 +513,8 @@ def back_to_main(message):
 
 @bot.message_handler(func=lambda message: message.text == 'ℹ️ Помощь')
 def help_cmd(message):
-    bot.send_message(message.chat.id, "Используйте кнопки внизу экрана для управления записями на питание.")
+    bot.send_message(message.chat.id, "Используйте кнопки для управления записями.")
 
 if __name__ == '__main__':
-    print("🚀 Бот запущен и готов к работе...")
+    print("🚀 Бот запущен...")
     bot.polling(none_stop=True)
