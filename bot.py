@@ -57,7 +57,6 @@ def get_students_with_status():
         sheet = sh.worksheet("Список")
         rows = sheet.get_all_values()
         students = []
-        # ⭐ ДОБАВЛЕНЫ 'цена обеда' и 'цена' в список игнорируемых слов
         ignore_words = ['фио', 'список', 'фамилия', 'имя', 'фамилия имя', 'ученик', '№', 'цена обеда', 'цена']
         
         for i, row in enumerate(rows):
@@ -66,7 +65,8 @@ def get_students_with_status():
                 if name and name.lower() not in ignore_words:
                     status = str(row[1]).strip().upper() if len(row) >= 2 else ''
                     is_free = status in ['Б', 'БЕСПЛАТНО', 'FREE', 'ЛЬГОТНО', 'ЛЬГОТНОЕ']
-                    students.append({'row': i + 1, 'name': name, 'is_free': is_free})
+                    # ⭐ ДОБАВЛЕНО СМЕЩЕНИЕ +2 (в листе месяца данные начинаются со строки 3)
+                    students.append({'row_in_list': i + 1, 'row_in_month': i + 3, 'name': name, 'is_free': is_free})
         
         return students
     except Exception as e:
@@ -128,7 +128,7 @@ def send_welcome(message):
         return
         
     for st in students:
-        markup.add(types.InlineKeyboardButton(st['name'], callback_data=f"select_name_{st['row']}"))
+        markup.add(types.InlineKeyboardButton(st['name'], callback_data=f"select_name_{st['row_in_list']}"))
     
     bot.send_message(message.chat.id, "Привет! Выбери своё ФИО из списка:", reply_markup=markup)
 
@@ -137,7 +137,7 @@ def handle_name_selection(call):
     user_id = call.from_user.id
     row = int(call.data.split('_')[2])
     students = get_students_with_status()
-    name = next((st['name'] for st in students if st['row'] == row), 'Ученик')
+    name = next((st['name'] for st in students if st['row_in_list'] == row), 'Ученик')
     
     user_states[user_id]['name'] = name
     bot.answer_callback_query(call.id, f"Выбрано: {name}")
@@ -197,7 +197,8 @@ def handle_manage_date_selection(call):
             return
         
         for st in students:
-            val = str(sheet.cell(st['row'], col).value).strip()
+            # ⭐ ИСПОЛЬЗУЕМ row_in_month для чтения из листа месяца
+            val = str(sheet.cell(st['row_in_month'], col).value).strip()
             if val == 'П':
                 st['current_status'] = 'paid'
             elif val == 'Б':
@@ -211,7 +212,6 @@ def handle_manage_date_selection(call):
         bot.send_message(call.message.chat.id, f"Ошибка: {e}")
         return
     
-    # Отправляем новое сообщение со списком
     msg = render_manage_students_message(call.message.chat.id, state)
     state['manage_message_id'] = msg.message_id
 
@@ -222,7 +222,7 @@ def render_manage_students_message(chat_id, state):
     markup = types.InlineKeyboardMarkup(row_width=1)
     
     for st in students:
-        row_num = st['row']
+        row_num = st['row_in_list']
         is_selected = row_num in selected_rows
         current_status = st.get('current_status', 'none')
         
@@ -265,14 +265,13 @@ def toggle_manage_student(call):
     
     bot.answer_callback_query(call.id)
     
-    # Редактируем существующее сообщение
     students = state.get('students_cache', [])
     selected_rows = state.get('selected', [])
     
     markup = types.InlineKeyboardMarkup(row_width=1)
     
     for st in students:
-        row_num = st['row']
+        row_num = st['row_in_list']
         is_selected = row_num in selected_rows
         current_status = st.get('current_status', 'none')
         
@@ -322,14 +321,15 @@ def confirm_manage(call):
         to_remove = []
         
         for st in students:
-            if st['row'] in selected_rows:
+            if st['row_in_list'] in selected_rows:
                 current = st.get('current_status', 'none')
                 if current == 'none':
                     mark = 'Б' if st['is_free'] else 'П'
-                    sheet.update_cell(st['row'], col, mark)
+                    # ⭐ ИСПОЛЬЗУЕМ row_in_month для записи в лист месяца
+                    sheet.update_cell(st['row_in_month'], col, mark)
                     to_sign.append(f"{st['name']} ({'Б' if st['is_free'] else 'П'})")
                 else:
-                    sheet.update_cell(st['row'], col, '')
+                    sheet.update_cell(st['row_in_month'], col, '')
                     to_remove.append(st['name'])
         
         report = f"✅ Сохранено на {date_str}:\n\n"
@@ -378,7 +378,8 @@ def process_view_list(call):
         free_count = 0
         
         for st in students:
-            val = str(sheet.cell(st['row'], col).value).strip()
+            # ⭐ ИСПОЛЬЗУЕМ row_in_month
+            val = str(sheet.cell(st['row_in_month'], col).value).strip()
             if val in ['П', 'Б']:
                 signed.append(f"{'🆓' if st['is_free'] else '✅'} {st['name']}")
                 if st['is_free']: free_count += 1
@@ -414,7 +415,8 @@ def process_stats(call):
         free_count = 0
         
         for st in students:
-            val = str(sheet.cell(st['row'], col).value).strip()
+            # ⭐ ИСПОЛЬЗУЕМ row_in_month
+            val = str(sheet.cell(st['row_in_month'], col).value).strip()
             if val == 'П': paid_count += 1
             elif val == 'Б': free_count += 1
             
