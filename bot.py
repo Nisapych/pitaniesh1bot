@@ -55,7 +55,7 @@ def get_current_sheet_name():
 def get_students_with_status():
     try:
         sheet = sh.worksheet("Список")
-        rows = sheet.get_all_values()
+        rows = sheet.get_all_values() # 1 запрос на весь лист
         students = []
         ignore_words = ['фио', 'список', 'фамилия', 'имя', 'фамилия имя', 'ученик', '№', 'цена обеда', 'цена', 'статус', 'тип']
         
@@ -65,9 +65,7 @@ def get_students_with_status():
                 if name and name.lower() not in ignore_words:
                     status = str(row[1]).strip().upper() if len(row) >= 2 else ''
                     is_free = status in ['Б', 'БЕСПЛАТНО', 'FREE', 'ЛЬГОТНО', 'ЛЬГОТНОЕ']
-                    # row = номер строки в таблице (1-based)
                     students.append({'row': i + 1, 'name': name, 'is_free': is_free})
-        
         return students
     except Exception as e:
         print(f"Ошибка чтения списка: {e}")
@@ -76,7 +74,7 @@ def get_students_with_status():
 def get_date_column_index(date_str):
     try:
         sheet = sh.worksheet(get_current_sheet_name())
-        headers = sheet.row_values(1)
+        headers = sheet.row_values(1) # 1 запрос на заголовки
         for i, header in enumerate(headers, start=1):
             if str(header).strip() == str(date_str).strip():
                 return i
@@ -162,12 +160,13 @@ def show_responsible_menu(message):
     markup.add('📊 Статистика дня')
     bot.send_message(message.chat.id, "👤 Меню ответственного", reply_markup=markup)
 
+# ================= УПРАВЛЕНИЕ ДЛЯ АДМИНА/ОТВЕТСТВЕННОГО =================
+
 @bot.message_handler(func=lambda message: message.text == '📝 Управление записями')
 def start_manage_records(message):
     user_id = message.from_user.id
     if user_states.get(user_id, {}).get('role') not in ['admin', 'responsible']:
         return
-    
     user_states[user_id] = {'role': user_states[user_id]['role'], 'action': 'select_date_manage', 'selected': []}
     bot.send_message(message.chat.id, "Выберите дату:", reply_markup=get_available_dates_markup('manage_date'))
 
@@ -175,15 +174,13 @@ def start_manage_records(message):
 def handle_manage_date_selection(call):
     user_id = call.from_user.id
     state = user_states.get(user_id, {})
-    if state.get('action') != 'select_date_manage':
-        return
+    if state.get('action') != 'select_date_manage': return
     
     date_str = call.data.replace('manage_date_', '')
     state['action'] = 'select_students_manage'
     state['target_date'] = date_str
     state['selected'] = []
     state['students_cache'] = []
-    state['manage_message_id'] = None
     
     bot.answer_callback_query(call.id, f"Дата: {date_str}")
     
@@ -191,33 +188,28 @@ def handle_manage_date_selection(call):
         sheet = sh.worksheet(get_current_sheet_name())
         col = get_date_column_index(date_str)
         students = get_students_with_status()
-        
         if not students:
             bot.send_message(call.message.chat.id, "⚠️ Список учеников пуст!")
             return
         
+        # ОПТИМИЗАЦИЯ: 1 запрос на весь столбец
+        col_values = sheet.col_values(col)
         for st in students:
-            val = str(sheet.cell(st['row'], col).value).strip()
-            if val == 'П':
-                st['current_status'] = 'paid'
-            elif val == 'Б':
-                st['current_status'] = 'free'
-            else:
-                st['current_status'] = 'none'
-        
+            row_index = st['row'] - 1
+            val = str(col_values[row_index]).strip() if row_index < len(col_values) else ''
+            if val == 'П': st['current_status'] = 'paid'
+            elif val == 'Б': st['current_status'] = 'free'
+            else: st['current_status'] = 'none'
         state['students_cache'] = students
-        
     except Exception as e:
         bot.send_message(call.message.chat.id, f"Ошибка: {e}")
         return
     
-    msg = render_manage_students_message(call.message.chat.id, state)
-    state['manage_message_id'] = msg.message_id
+    render_manage_students_message(call.message.chat.id, state)
 
 def render_manage_students_message(chat_id, state):
     students = state.get('students_cache', [])
     selected_rows = state.get('selected', [])
-    
     markup = types.InlineKeyboardMarkup(row_width=1)
     
     for st in students:
@@ -225,12 +217,9 @@ def render_manage_students_message(chat_id, state):
         is_selected = row_num in selected_rows
         current_status = st.get('current_status', 'none')
         
-        if current_status == 'paid':
-            status_icon = "✅ (П)"
-        elif current_status == 'free':
-            status_icon = "🆓 (Б)"
-        else:
-            status_icon = "⬜"
+        if current_status == 'paid': status_icon = "✅ (П)"
+        elif current_status == 'free': status_icon = "🆓 (Б)"
+        else: status_icon = "⬜"
         
         if is_selected:
             if current_status == 'none':
@@ -240,65 +229,25 @@ def render_manage_students_message(chat_id, state):
                 button_text = f"👉 {st['name']} {status_icon} → ⬜"
         else:
             button_text = f"   {st['name']} {status_icon}"
-        
         markup.add(types.InlineKeyboardButton(button_text, callback_data=f"toggle_manage_{row_num}"))
     
     markup.add(types.InlineKeyboardButton("💾 Сохранить изменения", callback_data="confirm_manage"))
     markup.add(types.InlineKeyboardButton("🔙 Отмена", callback_data="cancel_manage"))
-    
-    return bot.send_message(chat_id, "Отметьте учеников (нажмите для переключения):", reply_markup=markup)
+    bot.send_message(chat_id, "Отметьте учеников (нажмите для переключения):", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('toggle_manage_'))
 def toggle_manage_student(call):
     user_id = call.from_user.id
     state = user_states.get(user_id, {})
-    if state.get('action') != 'select_students_manage':
-        return
+    if state.get('action') != 'select_students_manage': return
     
     row = int(call.data.split('_')[2])
-    
-    if row in state['selected']:
-        state['selected'].remove(row)
-    else:
-        state['selected'].append(row)
+    if row in state['selected']: state['selected'].remove(row)
+    else: state['selected'].append(row)
     
     bot.answer_callback_query(call.id)
-    
-    students = state.get('students_cache', [])
-    selected_rows = state.get('selected', [])
-    
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    
-    for st in students:
-        row_num = st['row']
-        is_selected = row_num in selected_rows
-        current_status = st.get('current_status', 'none')
-        
-        if current_status == 'paid':
-            status_icon = "✅ (П)"
-        elif current_status == 'free':
-            status_icon = "🆓 (Б)"
-        else:
-            status_icon = "⬜"
-        
-        if is_selected:
-            if current_status == 'none':
-                new_status = "🆓" if st['is_free'] else "✅ (П)"
-                button_text = f"👉 {st['name']} {status_icon} → {new_status}"
-            else:
-                button_text = f"👉 {st['name']} {status_icon} → ⬜"
-        else:
-            button_text = f"   {st['name']} {status_icon}"
-        
-        markup.add(types.InlineKeyboardButton(button_text, callback_data=f"toggle_manage_{row_num}"))
-    
-    markup.add(types.InlineKeyboardButton("💾 Сохранить изменения", callback_data="confirm_manage"))
-    markup.add(types.InlineKeyboardButton("🔙 Отмена", callback_data="cancel_manage"))
-    
-    try:
-        bot.edit_message_reply_markup(chat_id=call.message.chat.id, message_id=call.message.message_id, reply_markup=markup)
-    except:
-        pass
+    # Перерисовываем из кэша без запросов к Google!
+    render_manage_students_message(call.message.chat.id, state)
 
 @bot.callback_query_handler(func=lambda call: call.data == 'confirm_manage')
 def confirm_manage(call):
@@ -315,9 +264,7 @@ def confirm_manage(call):
         sheet = sh.worksheet(get_current_sheet_name())
         col = get_date_column_index(date_str)
         students = state.get('students_cache', [])
-        
-        to_sign = []
-        to_remove = []
+        to_sign, to_remove = [], []
         
         for st in students:
             if st['row'] in selected_rows:
@@ -331,11 +278,8 @@ def confirm_manage(call):
                     to_remove.append(st['name'])
         
         report = f"✅ Сохранено на {date_str}:\n\n"
-        if to_sign:
-            report += f"📝 Записаны ({len(to_sign)}):\n" + "\n".join([f"• {name}" for name in to_sign]) + "\n\n"
-        if to_remove:
-            report += f"❌ Сняты ({len(to_remove)}):\n" + "\n".join([f"• {name}" for name in to_remove])
-        
+        if to_sign: report += f"📝 Записаны ({len(to_sign)}):\n" + "\n".join([f"• {name}" for name in to_sign]) + "\n\n"
+        if to_remove: report += f"❌ Сняты ({len(to_remove)}):\n" + "\n".join([f"• {name}" for name in to_remove])
         bot.send_message(call.message.chat.id, report)
     except Exception as e:
         bot.send_message(call.message.chat.id, f"Ошибка: {e}")
@@ -354,10 +298,101 @@ def cancel_manage(call):
     bot.answer_callback_query(call.id, "Отменено")
     bot.send_message(call.message.chat.id, "Действие отменено.")
 
+# ================= САМОЗАПИСЬ И ОТМЕНА ДЛЯ УЧЕНИКОВ =================
+
+@bot.message_handler(func=lambda message: message.text == '📅 Записаться')
+def student_signup(message):
+    user_id = message.from_user.id
+    state = user_states.get(user_id, {})
+    if state.get('role') != 'student' or not state.get('name'):
+        bot.send_message(message.chat.id, "Сначала выберите свое имя командой /start")
+        return
+    
+    state['action'] = 'student_signup_date'
+    bot.send_message(message.chat.id, "Выберите дату для записи:", reply_markup=get_available_dates_markup('student_signup'))
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('student_signup_'))
+def handle_student_signup_date(call):
+    user_id = call.from_user.id
+    state = user_states.get(user_id, {})
+    if state.get('action') != 'student_signup_date': return
+    
+    date_str = call.data.replace('student_signup_', '')
+    bot.answer_callback_query(call.id, f"Дата: {date_str}")
+    
+    try:
+        sheet = sh.worksheet(get_current_sheet_name())
+        col = get_date_column_index(date_str)
+        students = get_students_with_status()
+        current_student = next((st for st in students if st['name'] == state['name']), None)
+        
+        if not current_student:
+            bot.send_message(call.message.chat.id, "Ошибка: вас нет в списке.")
+            return
+        
+        # ОПТИМИЗАЦИЯ: 1 запрос на столбец
+        col_values = sheet.col_values(col)
+        row_index = current_student['row'] - 1
+        current_val = str(col_values[row_index]).strip() if row_index < len(col_values) else ''
+        
+        if current_val in ['П', 'Б']:
+            bot.send_message(call.message.chat.id, f"⚠️ Вы уже записаны на {date_str} ({current_val}). Чтобы изменить, сначала отмените запись.")
+        else:
+            mark = 'Б' if current_student['is_free'] else 'П'
+            sheet.update_cell(current_student['row'], col, mark)
+            bot.send_message(call.message.chat.id, f"✅ Вы успешно записаны на {date_str} ({'бесплатно' if current_student['is_free'] else 'платно'}).")
+    except Exception as e:
+        bot.send_message(call.message.chat.id, f"Ошибка: {e}")
+    state['action'] = None
+
+@bot.message_handler(func=lambda message: message.text == '❌ Отменить запись')
+def student_cancel(message):
+    user_id = message.from_user.id
+    state = user_states.get(user_id, {})
+    if state.get('role') != 'student' or not state.get('name'):
+        bot.send_message(message.chat.id, "Сначала выберите свое имя командой /start")
+        return
+    
+    state['action'] = 'student_cancel_date'
+    bot.send_message(message.chat.id, "Выберите дату для отмены:", reply_markup=get_available_dates_markup('student_cancel'))
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('student_cancel_'))
+def handle_student_cancel_date(call):
+    user_id = call.from_user.id
+    state = user_states.get(user_id, {})
+    if state.get('action') != 'student_cancel_date': return
+    
+    date_str = call.data.replace('student_cancel_', '')
+    bot.answer_callback_query(call.id, f"Дата: {date_str}")
+    
+    try:
+        sheet = sh.worksheet(get_current_sheet_name())
+        col = get_date_column_index(date_str)
+        students = get_students_with_status()
+        current_student = next((st for st in students if st['name'] == state['name']), None)
+        
+        if not current_student:
+            bot.send_message(call.message.chat.id, "Ошибка: вас нет в списке.")
+            return
+        
+        col_values = sheet.col_values(col)
+        row_index = current_student['row'] - 1
+        current_val = str(col_values[row_index]).strip() if row_index < len(col_values) else ''
+        
+        if current_val in ['П', 'Б']:
+            sheet.update_cell(current_student['row'], col, '')
+            bot.send_message(call.message.chat.id, f"✅ Запись на {date_str} успешно отменена.")
+        else:
+            bot.send_message(call.message.chat.id, f"⚠️ Вы и так не записаны на {date_str}.")
+    except Exception as e:
+        bot.send_message(call.message.chat.id, f"Ошибка: {e}")
+    state['action'] = None
+
+# ================= ПРОСМОТР И СТАТИСТИКА =================
+
 @bot.message_handler(func=lambda message: message.text == '📋 Список записавшихся')
 def show_all_signed(message):
-    if user_states.get(message.from_user.id, {}).get('role') not in ['admin', 'responsible']:
-        return
+    if user_states.get(message.from_user.id, {}).get('role') not in ['admin', 'responsible']: return
     bot.send_message(message.chat.id, "Выберите дату:", reply_markup=get_available_dates_markup('view_list'))
     user_states[message.from_user.id]['action'] = 'view_list'
 
@@ -368,15 +403,15 @@ def process_view_list(call):
     if not col:
         bot.send_message(call.message.chat.id, "Дата не найдена.")
         return
-    
     try:
         sheet = sh.worksheet(get_current_sheet_name())
         students = get_students_with_status()
-        signed = []
-        free_count = 0
+        signed, free_count = [], 0
         
+        col_values = sheet.col_values(col) # ОПТИМИЗАЦИЯ
         for st in students:
-            val = str(sheet.cell(st['row'], col).value).strip()
+            row_index = st['row'] - 1
+            val = str(col_values[row_index]).strip() if row_index < len(col_values) else ''
             if val in ['П', 'Б']:
                 signed.append(f"{'🆓' if st['is_free'] else '✅'} {st['name']}")
                 if st['is_free']: free_count += 1
@@ -391,8 +426,7 @@ def process_view_list(call):
 
 @bot.message_handler(func=lambda message: message.text == '📊 Статистика дня')
 def show_daily_stats(message):
-    if user_states.get(message.from_user.id, {}).get('role') not in ['admin', 'responsible']:
-        return
+    if user_states.get(message.from_user.id, {}).get('role') not in ['admin', 'responsible']: return
     bot.send_message(message.chat.id, "Выберите дату:", reply_markup=get_available_dates_markup('view_stats'))
     user_states[message.from_user.id]['action'] = 'view_stats'
 
@@ -403,16 +437,16 @@ def process_stats(call):
     if not col:
         bot.send_message(call.message.chat.id, "Дата не найдена.")
         return
-    
     try:
         sheet = sh.worksheet(get_current_sheet_name())
         students = get_students_with_status()
         total = len(students)
-        paid_count = 0
-        free_count = 0
+        paid_count, free_count = 0, 0
         
+        col_values = sheet.col_values(col) # ОПТИМИЗАЦИЯ
         for st in students:
-            val = str(sheet.cell(st['row'], col).value).strip()
+            row_index = st['row'] - 1
+            val = str(col_values[row_index]).strip() if row_index < len(col_values) else ''
             if val == 'П': paid_count += 1
             elif val == 'Б': free_count += 1
             
@@ -426,10 +460,11 @@ def process_stats(call):
         response += f"🆓 Записались (бесплатно): {free_count}\n"
         response += f"❌ Не записались: {total - total_signed}\n"
         response += f"💵 Итого к оплате: {total_sum:.2f} BYN"
-        
         bot.send_message(call.message.chat.id, response)
     except Exception as e:
         bot.send_message(call.message.chat.id, f"Ошибка: {e}")
+
+# ================= УПРАВЛЕНИЕ ОТВЕТСТВЕННЫМИ =================
 
 @bot.message_handler(func=lambda message: message.text == '⚙️ Управление ответственными')
 def admin_panel(message):
@@ -456,7 +491,6 @@ def process_add_resp(message):
         except:
             bot.send_message(message.chat.id, "Не удалось определить ID.")
             return
-    
     resp = load_responsible()
     if new_id in resp:
         bot.send_message(message.chat.id, "Уже является ответственным.")
