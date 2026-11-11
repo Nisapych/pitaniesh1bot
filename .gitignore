@@ -1,0 +1,10 @@
+users_db.json
+.env
+credentials.json
+responsible.json
+*.pyc
+__pycache__/
+venv/
+*.bak
+test_bot.py
+debug_bot.py
