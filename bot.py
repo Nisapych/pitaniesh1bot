@@ -24,6 +24,7 @@ user_states = {}
 RESPONSIBLE_FILE = 'responsible.json'
 DB_FILE = 'users_db.json'
 
+# ================= БАЗА ДАННЫХ УЧЕНИКОВ =================
 def load_users_db():
     if os.path.exists(DB_FILE):
         try:
@@ -36,6 +37,7 @@ def save_users_db(db):
     with open(DB_FILE, 'w', encoding='utf-8') as f:
         json.dump(db, f, ensure_ascii=False, indent=4)
 
+# ================= ОТВЕТСТВЕННЫЕ =================
 def load_responsible():
     if os.path.exists(RESPONSIBLE_FILE):
         try:
@@ -51,6 +53,7 @@ def save_responsible(resp_list):
 def is_responsible(user_id):
     return user_id in load_responsible()
 
+# ================= GOOGLE SHEETS ЛОГИКА =================
 HOLIDAYS = [
     (datetime.date(2026, 11, 1), datetime.date(2026, 11, 8)),
     (datetime.date(2026, 12, 25), datetime.date(2027, 1, 10)),
@@ -114,6 +117,7 @@ def get_available_dates_markup(action_prefix):
     except: pass
     return markup
 
+# ================= МЕНЮ =================
 def show_admin_menu(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=1)
     markup.add('📝 Управление записями', '📋 Список записавшихся', '📊 Статистика дня', '⚙️ Управление ответственными')
@@ -131,105 +135,123 @@ def show_student_menu(chat_id, name):
     markup.add('ℹ️ Помощь')
     bot.send_message(chat_id, f"Главное меню (ты: {name})", reply_markup=markup)
 
+# ================= СТАРТ =================
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    user_id = message.from_user.id
-    user_id_str = str(user_id) # ВСЕГДА ИСПОЛЬЗУЕМ СТРОКУ ДЛЯ JSON
-    chat_id = message.chat.id
-    
-    if user_id == ADMIN_ID:
-        user_states[user_id] = {'role': 'admin', 'chat_id': chat_id}
-        show_admin_menu(message)
-        return
-    if is_responsible(user_id):
-        user_states[user_id] = {'role': 'responsible', 'chat_id': chat_id}
-        show_responsible_menu(message)
-        return
-    
-    users_db = load_users_db()
-    if user_id_str in users_db:
-        name = users_db[user_id_str]
-        user_states[user_id] = {'role': 'student', 'name': name, 'chat_id': chat_id}
-        show_student_menu(chat_id, name)
-        return
-    
-    user_states[user_id] = {'role': 'student', 'name': None, 'chat_id': chat_id}
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    students = get_students_with_status()
-    if not students:
-        bot.send_message(chat_id, "⚠️ Не удалось загрузить список учеников.")
-        return
-    for st in students:
-        markup.add(types.InlineKeyboardButton(st['name'], callback_data=f"select_name_{st['row']}"))
-    bot.send_message(chat_id, "Привет! Выбери своё ФИО из списка:", reply_markup=markup)
+    try:
+        user_id = message.from_user.id
+        user_id_str = str(user_id)
+        chat_id = message.chat.id
+        
+        if user_id == ADMIN_ID:
+            user_states[user_id] = {'role': 'admin', 'chat_id': chat_id}
+            show_admin_menu(message)
+            return
+        if is_responsible(user_id):
+            user_states[user_id] = {'role': 'responsible', 'chat_id': chat_id}
+            show_responsible_menu(message)
+            return
+        
+        users_db = load_users_db()
+        if user_id_str in users_db:
+            name = users_db[user_id_str]
+            user_states[user_id] = {'role': 'student', 'name': name, 'chat_id': chat_id}
+            show_student_menu(chat_id, name)
+            return
+        
+        user_states[user_id] = {'role': 'student', 'name': None, 'chat_id': chat_id}
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        students = get_students_with_status()
+        if not students:
+            bot.send_message(chat_id, "⚠️ Не удалось загрузить список учеников.")
+            return
+        for st in students:
+            markup.add(types.InlineKeyboardButton(st['name'], callback_data=f"select_name_{st['row']}"))
+        bot.send_message(chat_id, "Привет! Выбери своё ФИО из списка:", reply_markup=markup)
+    except Exception as e:
+        print(f"❌ Ошибка в send_welcome: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('select_name_'))
 def handle_name_selection(call):
-    user_id = call.from_user.id
-    user_id_str = str(user_id) # ВСЕГДА СТРОКА
-    chat_id = call.message.chat.id if call.message else user_states.get(user_id, {}).get('chat_id')
-    if not chat_id: return
-    
-    row = int(call.data.split('_')[2])
-    students = get_students_with_status()
-    name = next((st['name'] for st in students if st['row'] == row), 'Ученик')
-    
-    users_db = load_users_db()
-    users_db[user_id_str] = name # СОХРАНЯЕМ КАК СТРОКУ
-    save_users_db(users_db)
-    
-    user_states[user_id] = {'role': 'student', 'name': name, 'chat_id': chat_id}
-    bot.answer_callback_query(call.id, f"Выбрано: {name}")
-    show_student_menu(chat_id, name)
+    try:
+        user_id = call.from_user.id
+        user_id_str = str(user_id)
+        chat_id = call.message.chat.id if call.message else user_states.get(user_id, {}).get('chat_id')
+        if not chat_id: return
+        
+        row = int(call.data.split('_')[2])
+        students = get_students_with_status()
+        name = next((st['name'] for st in students if st['row'] == row), 'Ученик')
+        
+        users_db = load_users_db()
+        users_db[user_id_str] = name
+        save_users_db(users_db)
+        
+        user_states[user_id] = {'role': 'student', 'name': name, 'chat_id': chat_id}
+        bot.answer_callback_query(call.id, f"Выбрано: {name}")
+        show_student_menu(chat_id, name)
+    except Exception as e:
+        print(f"❌ Ошибка в handle_name_selection: {e}")
 
+# ================= УЧЕНИК: СМЕНА ФИО И ПОМОЩЬ =================
 @bot.message_handler(func=lambda message: message.text == '🔄 Сменить ФИО')
 def change_name(message):
-    user_id = message.from_user.id
-    user_id_str = str(user_id)
-    chat_id = message.chat.id
-    users_db = load_users_db()
-    if user_id_str in users_db:
-        del users_db[user_id_str]
-        save_users_db(users_db)
-    user_states[user_id] = {'role': 'student', 'name': None, 'chat_id': chat_id}
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    students = get_students_with_status()
-    for st in students:
-        markup.add(types.InlineKeyboardButton(st['name'], callback_data=f"select_name_{st['row']}"))
-    bot.send_message(chat_id, "Выбери своё новое ФИО из списка:", reply_markup=markup)
+    try:
+        user_id = message.from_user.id
+        user_id_str = str(user_id)
+        chat_id = message.chat.id
+        users_db = load_users_db()
+        if user_id_str in users_db:
+            del users_db[user_id_str]
+            save_users_db(users_db)
+        user_states[user_id] = {'role': 'student', 'name': None, 'chat_id': chat_id}
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for st in get_students_with_status():
+            markup.add(types.InlineKeyboardButton(st['name'], callback_data=f"select_name_{st['row']}"))
+        bot.send_message(chat_id, "Выбери своё новое ФИО из списка:", reply_markup=markup)
+    except Exception as e:
+        print(f"❌ Ошибка в change_name: {e}")
 
 @bot.message_handler(func=lambda message: message.text == 'ℹ️ Помощь')
 def help_cmd(message):
     bot.send_message(message.chat.id, "📖 Помощь:\n📅 Записаться\n📋 Мои записи\n❌ Отменить запись\n🔄 Сменить ФИО")
 
+# ================= УПРАВЛЕНИЕ ЗАПИСЯМИ (АДМИН / ОТВЕТСТВЕННЫЙ) =================
 @bot.message_handler(func=lambda message: message.text == '📝 Управление записями')
 def start_manage_records(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    current_role = user_states.get(user_id, {}).get('role')
-    if current_role not in ['admin', 'responsible']:
-        if is_responsible(user_id): current_role = 'responsible'
-        elif user_id == ADMIN_ID: current_role = 'admin'
-        else:
-            bot.send_message(chat_id, "⛔ У вас нет прав.")
-            return
-    user_states[user_id] = {'role': current_role, 'action': 'select_date_manage', 'selected': [], 'chat_id': chat_id}
-    bot.send_message(chat_id, "Выберите дату:", reply_markup=get_available_dates_markup('manage_date'))
+    try:
+        user_id = message.from_user.id
+        chat_id = message.chat.id
+        current_role = user_states.get(user_id, {}).get('role')
+        
+        if current_role not in ['admin', 'responsible']:
+            if is_responsible(user_id): current_role = 'responsible'
+            elif user_id == ADMIN_ID: current_role = 'admin'
+            else:
+                bot.send_message(chat_id, "⛔ У вас нет прав.")
+                return
+                
+        user_states[user_id] = {'role': current_role, 'action': 'select_date_manage', 'selected': [], 'chat_id': chat_id}
+        bot.send_message(chat_id, "Выберите дату:", reply_markup=get_available_dates_markup('manage_date'))
+    except Exception as e:
+        print(f"❌ Ошибка в start_manage_records: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('manage_date_'))
 def handle_manage_date_selection(call):
-    user_id = call.from_user.id
-    state = user_states.get(user_id, {})
-    if state.get('action') != 'select_date_manage': return
-    chat_id = call.message.chat.id if call.message else state.get('chat_id')
-    date_str = call.data.replace('manage_date_', '')
-    state['action'] = 'select_students_manage'
-    state['target_date'] = date_str
-    state['selected'] = []
-    state['students_cache'] = []
-    state['chat_id'] = chat_id
-    bot.answer_callback_query(call.id, f"Дата: {date_str}")
     try:
+        user_id = call.from_user.id
+        state = user_states.get(user_id, {})
+        if state.get('action') != 'select_date_manage': return
+        
+        chat_id = call.message.chat.id if call.message else state.get('chat_id')
+        date_str = call.data.replace('manage_date_', '')
+        state['action'] = 'select_students_manage'
+        state['target_date'] = date_str
+        state['selected'] = []
+        state['students_cache'] = []
+        state['chat_id'] = chat_id
+        bot.answer_callback_query(call.id, f"Дата: {date_str}")
+        
         sheet = sh.worksheet(get_current_sheet_name())
         col = get_date_column_index(date_str)
         students = get_students_with_status()
@@ -241,10 +263,11 @@ def handle_manage_date_selection(call):
             elif val == 'Б': st['current_status'] = 'free'
             else: st['current_status'] = 'none'
         state['students_cache'] = students
+        
         msg = bot.send_message(chat_id, "Отметьте учеников:", reply_markup=build_manage_markup(state))
         state['manage_message_id'] = msg.message_id
     except Exception as e:
-        bot.send_message(chat_id, f"Ошибка: {e}")
+        print(f"❌ Ошибка в handle_manage_date_selection: {e}")
 
 def build_manage_markup(state):
     students = state.get('students_cache', [])
@@ -267,32 +290,37 @@ def build_manage_markup(state):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('toggle_manage_'))
 def toggle_manage_student(call):
-    user_id = call.from_user.id
-    state = user_states.get(user_id, {})
-    if state.get('action') != 'select_students_manage': return
-    row = int(call.data.split('_')[2])
-    if row in state['selected']: state['selected'].remove(row)
-    else: state['selected'].append(row)
-    bot.answer_callback_query(call.id)
-    chat_id = state.get('chat_id')
-    message_id = state.get('manage_message_id')
-    if chat_id and message_id:
-        try:
-            bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id, reply_markup=build_manage_markup(state))
-        except:
-            msg = bot.send_message(chat_id, "Отметьте учеников:", reply_markup=build_manage_markup(state))
-            state['manage_message_id'] = msg.message_id
+    try:
+        user_id = call.from_user.id
+        state = user_states.get(user_id, {})
+        if state.get('action') != 'select_students_manage': return
+        row = int(call.data.split('_')[2])
+        if row in state['selected']: state['selected'].remove(row)
+        else: state['selected'].append(row)
+        bot.answer_callback_query(call.id)
+        
+        chat_id = state.get('chat_id')
+        message_id = state.get('manage_message_id')
+        if chat_id and message_id:
+            try:
+                bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id, reply_markup=build_manage_markup(state))
+            except:
+                msg = bot.send_message(chat_id, "Отметьте учеников:", reply_markup=build_manage_markup(state))
+                state['manage_message_id'] = msg.message_id
+    except Exception as e:
+        print(f"❌ Ошибка в toggle_manage_student: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data == 'confirm_manage')
 def confirm_manage(call):
-    user_id = call.from_user.id
-    state = user_states.get(user_id, {})
-    date_str = state.get('target_date')
-    selected_rows = state.get('selected', [])
-    if not selected_rows:
-        bot.answer_callback_query(call.id, "Никто не выбран!", show_alert=True)
-        return
     try:
+        user_id = call.from_user.id
+        state = user_states.get(user_id, {})
+        date_str = state.get('target_date')
+        selected_rows = state.get('selected', [])
+        if not selected_rows:
+            bot.answer_callback_query(call.id, "Никто не выбран!", show_alert=True)
+            return
+        
         sheet = sh.worksheet(get_current_sheet_name())
         col = get_date_column_index(date_str)
         students = state.get('students_cache', [])
@@ -307,6 +335,7 @@ def confirm_manage(call):
                 else:
                     sheet.update_cell(st['row'], col, '')
                     to_remove.append(st['name'])
+        
         chat_id = state.get('chat_id')
         if chat_id:
             report = f"✅ Сохранено на {date_str}:\n"
@@ -314,43 +343,52 @@ def confirm_manage(call):
             if to_remove: report += f"❌ Сняты: " + ", ".join(to_remove)
             bot.send_message(chat_id, report)
     except Exception as e:
-        bot.send_message(state.get('chat_id'), f"Ошибка: {e}")
+        print(f"❌ Ошибка в confirm_manage: {e}")
     state['action'] = None
 
 @bot.callback_query_handler(func=lambda call: call.data == 'cancel_manage')
 def cancel_manage(call):
-    user_id = call.from_user.id
-    if user_id in user_states:
-        user_states[user_id]['action'] = None
-    bot.answer_callback_query(call.id, "Отменено")
-    bot.send_message(call.message.chat.id, "Действие отменено.")
+    try:
+        user_id = call.from_user.id
+        if user_id in user_states: user_states[user_id]['action'] = None
+        bot.answer_callback_query(call.id, "Отменено")
+        chat_id = call.message.chat.id if call.message else user_states.get(user_id, {}).get('chat_id')
+        if chat_id: bot.send_message(chat_id, "Действие отменено.")
+    except Exception as e:
+        print(f"❌ Ошибка в cancel_manage: {e}")
 
+# ================= УЧЕНИК: ЗАПИСЬ И ОТМЕНА =================
 @bot.message_handler(func=lambda message: message.text == '📅 Записаться')
 def student_signup(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    state = user_states.get(user_id, {})
-    if state.get('role') != 'student' or not state.get('name'):
-        bot.send_message(chat_id, "Сначала выберите свое имя командой /start")
-        return
-    state['action'] = 'student_signup_date'
-    state['chat_id'] = chat_id
-    bot.send_message(chat_id, "Выберите дату для записи:", reply_markup=get_available_dates_markup('student_signup'))
+    try:
+        user_id = message.from_user.id
+        chat_id = message.chat.id
+        state = user_states.get(user_id, {})
+        if state.get('role') != 'student' or not state.get('name'):
+            bot.send_message(chat_id, "Сначала выберите свое имя командой /start")
+            return
+        state['action'] = 'student_signup_date'
+        state['chat_id'] = chat_id
+        bot.send_message(chat_id, "Выберите дату для записи:", reply_markup=get_available_dates_markup('student_signup'))
+    except Exception as e:
+        print(f"❌ Ошибка в student_signup: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('student_signup_'))
 def handle_student_signup_date(call):
-    user_id = call.from_user.id
-    state = user_states.get(user_id, {})
-    if state.get('action') != 'student_signup_date': return
-    chat_id = state.get('chat_id', call.message.chat.id if call.message else None)
-    date_str = call.data.replace('student_signup_', '')
-    bot.answer_callback_query(call.id, f"Дата: {date_str}")
     try:
+        user_id = call.from_user.id
+        state = user_states.get(user_id, {})
+        if state.get('action') != 'student_signup_date': return
+        chat_id = state.get('chat_id', call.message.chat.id if call.message else None)
+        date_str = call.data.replace('student_signup_', '')
+        bot.answer_callback_query(call.id, f"Дата: {date_str}")
+        
         sheet = sh.worksheet(get_current_sheet_name())
         col = get_date_column_index(date_str)
         students = get_students_with_status()
         current_student = next((st for st in students if st['name'] == state['name']), None)
         if not current_student: return
+        
         col_values = sheet.col_values(col)
         row_index = current_student['row'] - 1
         current_val = str(col_values[row_index]).strip() if row_index < len(col_values) else ''
@@ -361,22 +399,24 @@ def handle_student_signup_date(call):
             sheet.update_cell(current_student['row'], col, mark)
             bot.send_message(chat_id, f"✅ Вы успешно записаны на {date_str}.")
     except Exception as e:
-        bot.send_message(chat_id, f"Ошибка: {e}")
+        print(f"❌ Ошибка в handle_student_signup_date: {e}")
     state['action'] = None
 
 @bot.message_handler(func=lambda message: message.text == '📋 Мои записи')
 def student_my_records(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    state = user_states.get(user_id, {})
-    if state.get('role') != 'student' or not state.get('name'):
-        bot.send_message(chat_id, "Сначала выберите свое имя командой /start")
-        return
     try:
+        user_id = message.from_user.id
+        chat_id = message.chat.id
+        state = user_states.get(user_id, {})
+        if state.get('role') != 'student' or not state.get('name'):
+            bot.send_message(chat_id, "Сначала выберите свое имя командой /start")
+            return
+        
         sheet = sh.worksheet(get_current_sheet_name())
         students = get_students_with_status()
         current_student = next((st for st in students if st['name'] == state['name']), None)
         if not current_student: return
+        
         headers = sheet.row_values(1)
         date_cols = [(i, str(h).strip()) for i, h in enumerate(headers, start=1) if i >= 3 and '.' in str(h)]
         row_values = sheet.row_values(current_student['row'])
@@ -386,37 +426,43 @@ def student_my_records(message):
             if val in ['П', 'Б']:
                 status = "бесплатно 🆓" if val == 'Б' else "платно ✅"
                 my_records.append(f"📅 {date_str} — {status}")
+                
         response = f"📋 Ваши записи:\n\n" + "\n".join(my_records) if my_records else f"📋 Вы пока не записаны."
         bot.send_message(chat_id, response)
     except Exception as e:
-        bot.send_message(chat_id, f"Ошибка: {e}")
+        print(f"❌ Ошибка в student_my_records: {e}")
 
 @bot.message_handler(func=lambda message: message.text == '❌ Отменить запись')
 def student_cancel(message):
-    user_id = message.from_user.id
-    chat_id = message.chat.id
-    state = user_states.get(user_id, {})
-    if state.get('role') != 'student' or not state.get('name'):
-        bot.send_message(chat_id, "Сначала выберите свое имя командой /start")
-        return
-    state['action'] = 'student_cancel_date'
-    state['chat_id'] = chat_id
-    bot.send_message(chat_id, "Выберите дату для отмены:", reply_markup=get_available_dates_markup('student_cancel'))
+    try:
+        user_id = message.from_user.id
+        chat_id = message.chat.id
+        state = user_states.get(user_id, {})
+        if state.get('role') != 'student' or not state.get('name'):
+            bot.send_message(chat_id, "Сначала выберите свое имя командой /start")
+            return
+        state['action'] = 'student_cancel_date'
+        state['chat_id'] = chat_id
+        bot.send_message(chat_id, "Выберите дату для отмены:", reply_markup=get_available_dates_markup('student_cancel'))
+    except Exception as e:
+        print(f"❌ Ошибка в student_cancel: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('student_cancel_'))
 def handle_student_cancel_date(call):
-    user_id = call.from_user.id
-    state = user_states.get(user_id, {})
-    if state.get('action') != 'student_cancel_date': return
-    chat_id = state.get('chat_id', call.message.chat.id if call.message else None)
-    date_str = call.data.replace('student_cancel_', '')
-    bot.answer_callback_query(call.id, f"Дата: {date_str}")
     try:
+        user_id = call.from_user.id
+        state = user_states.get(user_id, {})
+        if state.get('action') != 'student_cancel_date': return
+        chat_id = state.get('chat_id', call.message.chat.id if call.message else None)
+        date_str = call.data.replace('student_cancel_', '')
+        bot.answer_callback_query(call.id, f"Дата: {date_str}")
+        
         sheet = sh.worksheet(get_current_sheet_name())
         col = get_date_column_index(date_str)
         students = get_students_with_status()
         current_student = next((st for st in students if st['name'] == state['name']), None)
         if not current_student: return
+        
         col_values = sheet.col_values(col)
         row_index = current_student['row'] - 1
         current_val = str(col_values[row_index]).strip() if row_index < len(col_values) else ''
@@ -426,28 +472,63 @@ def handle_student_cancel_date(call):
         else:
             bot.send_message(chat_id, f"⚠️ Вы и так не записаны.")
     except Exception as e:
-        bot.send_message(chat_id, f"Ошибка: {e}")
+        print(f"❌ Ошибка в handle_student_cancel_date: {e}")
     state['action'] = None
 
+# ================= АДМИН / ОТВЕТСТВЕННЫЙ: СПИСКИ И СТАТИСТИКА =================
+# ⭐ ИСПРАВЛЕННАЯ ФУНКЦИЯ: безопасная работа с состоянием
 @bot.message_handler(func=lambda message: message.text in ['📋 Список записавшихся', '📊 Статистика дня'])
 def admin_stats(message):
-    bot.send_message(message.chat.id, "Выберите дату:", reply_markup=get_available_dates_markup('view_list' if message.text == '📋 Список записавшихся' else 'view_stats'))
-    user_states[message.from_user.id]['action'] = 'view_list' if message.text == '📋 Список записавшихся' else 'view_stats'
+    try:
+        user_id = message.from_user.id
+        chat_id = message.chat.id
+        
+        # 1. Гарантируем, что словарь состояния существует
+        if user_id not in user_states:
+            user_states[user_id] = {}
+        
+        # 2. Проверяем и восстанавливаем роль, если она слетела
+        current_role = user_states[user_id].get('role')
+        if current_role not in ['admin', 'responsible']:
+            if is_responsible(user_id):
+                user_states[user_id]['role'] = 'responsible'
+            elif user_id == ADMIN_ID:
+                user_states[user_id]['role'] = 'admin'
+            else:
+                bot.send_message(chat_id, "⛔ У вас нет прав для этого действия.")
+                return
+        
+        # 3. Безопасно устанавливаем действие и chat_id
+        action = 'view_list' if message.text == '📋 Список записавшихся' else 'view_stats'
+        user_states[user_id]['action'] = action
+        user_states[user_id]['chat_id'] = chat_id
+        
+        bot.send_message(chat_id, "Выберите дату:", reply_markup=get_available_dates_markup(action))
+    except Exception as e:
+        print(f"❌ Ошибка в admin_stats: {e}")
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('view_list_') or call.data.startswith('view_stats_'))
 def process_view(call):
-    if call.data.startswith('view_list_'):
-        date_str = call.data.replace('view_list_', '')
-    else:
-        date_str = call.data.replace('view_stats_', '')
-    col = get_date_column_index(date_str)
-    if not col:
-        bot.send_message(call.message.chat.id, "Дата не найдена.")
-        return
     try:
+        user_id = call.from_user.id
+        chat_id = call.message.chat.id if call.message else user_states.get(user_id, {}).get('chat_id')
+        
+        if call.data.startswith('view_list_'):
+            date_str = call.data.replace('view_list_', '')
+            is_stats = False
+        else:
+            date_str = call.data.replace('view_stats_', '')
+            is_stats = True
+            
+        col = get_date_column_index(date_str)
+        if not col:
+            if chat_id: bot.send_message(chat_id, "Дата не найдена.")
+            return
+            
         sheet = sh.worksheet(get_current_sheet_name())
         students = get_students_with_status()
         col_values = sheet.col_values(col)
+        
         signed, free_count, paid_count = [], 0, 0
         for st in students:
             row_index = st['row'] - 1
@@ -458,15 +539,20 @@ def process_view(call):
             elif val == 'Б': 
                 signed.append(f"🆓 {st['name']}")
                 free_count += 1
-        if call.data.startswith('view_list_'):
-            response = f"📋 На {date_str} ({len(signed)} чел.):\n" + "\n".join(signed) if signed else f"📋 На {date_str} никто не записан."
-        else:
-            total = len(students)
-            response = f"📊 Статистика на {date_str}:\n👥 Всего: {total}\n✅ Платно: {paid_count}\n🆓 Бесплатно: {free_count}\n❌ Не записались: {total - (paid_count + free_count)}\n💵 Итого: {paid_count * 1.50:.2f} BYN"
-        bot.send_message(call.message.chat.id, response)
+                
+        if chat_id:
+            if not is_stats:
+                response = f"📋 На {date_str} ({len(signed)} чел.):\n" + "\n".join(signed) if signed else f"📋 На {date_str} никто не записан."
+            else:
+                total = len(students)
+                response = f"📊 Статистика на {date_str}:\n👥 Всего: {total}\n✅ Платно: {paid_count}\n🆓 Бесплатно: {free_count}\n❌ Не записались: {total - (paid_count + free_count)}\n💵 Итого: {paid_count * 1.50:.2f} BYN"
+            bot.send_message(chat_id, response)
     except Exception as e:
-        bot.send_message(call.message.chat.id, f"Ошибка: {e}")
+        print(f"❌ Ошибка в process_view: {e}")
+        chat_id = call.message.chat.id if call.message else user_states.get(call.from_user.id, {}).get('chat_id')
+        if chat_id: bot.send_message(chat_id, "Произошла ошибка при обработке.")
 
+# ================= АДМИН: УПРАВЛЕНИЕ ОТВЕТСТВЕННЫМИ =================
 @bot.message_handler(func=lambda message: message.text == '⚙️ Управление ответственными')
 def admin_panel(message):
     if message.from_user.id != ADMIN_ID: return
@@ -526,6 +612,7 @@ def back_to_main(message):
         name = user_states.get(message.from_user.id, {}).get('name', 'Ученик')
         show_student_menu(message.chat.id, name)
 
+# ================= ЭКСПОРТ / ИМПОРТ =================
 @bot.message_handler(commands=['export_db'])
 def export_db(message):
     if message.from_user.id != ADMIN_ID: return
@@ -541,6 +628,7 @@ def import_db(message):
             f.write(bot.download_file(file_info.file_path))
         bot.send_message(message.chat.id, "✅ База импортирована!")
 
+# ================= ЗАПУСК =================
 if __name__ == '__main__':
     print("🚀 Бот запущен. Токен и ID загружены из .env")
     while True:
